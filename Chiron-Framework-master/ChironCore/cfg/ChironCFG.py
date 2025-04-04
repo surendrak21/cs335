@@ -3,66 +3,83 @@
 import networkx as nx
 
 class BasicBlock:
+    """
+    Represents a basic block in the control flow graph (CFG).
+    Each block has a unique name and a list of instructions.
+    """
+    _counter = 0  # Static counter to generate unique IR IDs for unnamed blocks
+
     def __init__(self, bbname):
         self.name = bbname
-        self.instrlist = []
-        if bbname == "START" or bbname == "END":
+        self.instrlist = []  # List of (instruction, index) tuples
+
+        if bbname in {"START", "END"}:
             self.irID = bbname
         else:
-            self.irID = int(bbname) - 1
+            self.irID = BasicBlock._counter
+            BasicBlock._counter += 1
 
     def __str__(self):
         return self.name
 
+    def __repr__(self):
+        return f"BB({self.name})"
+
     def append(self, instruction):
+        """Append a single instruction to this basic block."""
         self.instrlist.append(instruction)
 
     def extend(self, instructions):
+        """Extend the instruction list with multiple instructions."""
         self.instrlist.extend(instructions)
 
     def label(self):
-        if len(self.instrlist):
-            return '\n'.join(str(instr[0])+'; L'+ str(instr[1]) for instr in self.instrlist)
+        """
+        Generate a label for visualization or printing.
+        Shows instructions with their IR index if present, otherwise block name.
+        """
+        if self.instrlist:
+            return '\n'.join(f"{str(instr[0])}; L{instr[1]}" for instr in self.instrlist)
         else:
             return self.name
 
+    @staticmethod
+    def reset_counter():
+        """Reset the static counter for IR IDs. Useful for regenerating fresh CFGs."""
+        BasicBlock._counter = 0
+
 
 class ChironCFG:
-
     """
-    An adapter for Networkx.DiGraph.
+    An adapter for NetworkX's DiGraph to represent control flow graphs.
+    Allows easy use of graph algorithms with our custom BasicBlocks.
     """
 
     def __init__(self, gname='cfg'):
         self.name = gname
         self.nxgraph = nx.DiGraph(name=gname)
-        self.entry = "0"
+        self.entry = "START"
         self.exit = "END"
 
     def __iter__(self):
-        return self.nxgraph.__iter__()
+        return iter(self.nxgraph)
 
     def is_directed(self):
         return True
 
     def add_node(self, node):
         if not isinstance(node, BasicBlock):
-            raise ValueError("wrong type for 'node' parameter")
-
+            raise ValueError("Only BasicBlock instances can be added to CFG.")
         self.nxgraph.add_node(node)
 
     def has_node(self, node):
         return self.nxgraph.has_node(node)
 
     def add_edge(self, u, v, **attr):
-        if self.has_node(u):
-            if self.has_node(v):
-                self.nxgraph.add_edge(u, v, **attr)
-            else:
-                # TODO: do appropriate error reporting
-                raise NameError(v)
+        if self.has_node(u) and self.has_node(v):
+            self.nxgraph.add_edge(u, v, **attr)
         else:
-            raise NameError(u)
+            raise NameError(f"One or both nodes not in graph: {u}, {v}")
 
     def nodes(self):
         return self.nxgraph.nodes()
@@ -83,7 +100,8 @@ class ChironCFG:
         return self.nxgraph.in_degree(node)
 
     def get_edge_label(self, u, v):
-        edata = self.nxgraph.get_edge_data(u,v)
-        return edata['label'] if len(edata) else 'T'
+        edata = self.nxgraph.get_edge_data(u, v)
+        return edata.get('label', 'T') if edata else 'T'
 
-    # TODO: add more methods to expose other methods of the Networkx.DiGraph
+    def get_graph(self):
+        return self.nxgraph

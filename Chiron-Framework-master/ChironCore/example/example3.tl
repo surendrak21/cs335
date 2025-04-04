@@ -1,18 +1,29 @@
-:x = 20
-:y = 10
-:z = 5
-forward :x
-if (:y > :x) [
-  :x = 30
-  :y = 0
-  left :y
-  :z = 100
+:p = 10
+:q = 5
+:r = 3
+:s = 2
+:t = 1
+
+forward :p
+
+if (:q > :r) [
+  :p = 100
+  :q = 200
+  :r = 300
+  :s = 400
+  :t = 500
+  left :p
 ] else [
-  :x = 25
-  :y = :y + 5
-  right 50
-  :z = 200
+  :p = 110
+  :q = 210
+  :r = 310
+  :s = 410
+  :t = 510
+  right :q
 ]
-forward :x
-forward :y
-forward :z
+
+forward :p
+forward :q
+forward :r
+forward :s
+forward :t

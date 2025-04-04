@@ -13,30 +13,34 @@ logging.basicConfig(
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+# === Phi Function Representation ===
 class PhiFunction:
     def __init__(self, target):
         self.target = target
-        self.values = []  # Will be filled with (value, block) pairs
+        self.values = []  # List of (value, predecessor block)
 
     def add_value(self, value, block):
         self.values.append((value, block))
 
     def __str__(self):
-        return f"{self.target} = Φ({', '.join(f'{v}@{b.label()}' for v, b in self.values)})"
+        joined = ', '.join(f'{v}@{b.label()}' for v, b in self.values)
+        return f"{self.target} = Φ({joined})"
 
+# === CFG Validation ===
 def validate_cfg(cfg):
     try:
         if cfg is None or not hasattr(cfg, 'nodes'):
             logger.error("Invalid CFG: None or missing nodes")
             return False
         if not list(cfg.nodes()):
-            logger.error("Empty CFG")
+            logger.error("CFG is empty")
             return False
         return True
     except Exception as e:
-        logger.error(f"CFG validation failed: {str(e)}")
+        logger.error(f"CFG validation error: {str(e)}")
         return False
 
+# === Dominator Set Computation ===
 def compute_dominators(cfg):
     nodes = list(cfg.nodes())
     entry = nodes[0]
@@ -58,95 +62,103 @@ def compute_dominators(cfg):
 
     return dominators
 
+# === Dominance Frontier Computation ===
 def compute_dominance_frontiers(cfg, dominators):
     frontiers = defaultdict(set)
-    nodes = list(cfg.nodes())
-    for node in nodes:
+
+    for node in cfg.nodes():
         preds = list(cfg.predecessors(node))
         if len(preds) >= 2:
-            for p in preds:
-                runner = p
-                while runner != list(dominators[node] - {node})[0] if len(dominators[node] - {node}) > 0 else None:
+            for pred in preds:
+                runner = pred
+                while runner and node not in dominators[runner]:
                     frontiers[runner].add(node)
                     runner_doms = dominators.get(runner, set())
-                    if not runner_doms:
-                        break
-                    if runner in dominators:
-                        runner = next(iter(dominators[runner] - {runner})) if len(dominators[runner] - {runner}) > 0 else None
-                    else:
+                    runner = next(iter(runner_doms - {runner}), None)
+                    if runner == runner_doms:
                         break
     return frontiers
 
+# === Variable Definition Detection ===
 def find_variable_defs(cfg):
     var_defs = defaultdict(set)
-    entry_block = next(iter(cfg.nodes()))  # Track entry block for implicit definitions
-    
+    entry_block = next(iter(cfg.nodes()))  # assume first block is entry
+
     for node in cfg.nodes():
         for stmt in node.instrlist:
             instr = stmt[0] if isinstance(stmt, tuple) else stmt
-            # Detect assignments to variables (explicit definitions)
-            if hasattr(instr, 'lvar') and hasattr(instr.lvar, 'name') and instr.lvar.name.startswith(':'):
-                var_defs[instr.lvar.name].add(node)
-            elif hasattr(instr, 'var') and hasattr(instr.var, 'name') and instr.var.name.startswith(':'):
-                var_defs[instr.var.name].add(node)
-            elif str(instr).startswith(':') and '=' in str(instr):
-                var = str(instr).split('=')[0].strip()
-                if var.startswith(':'):
-                    var_defs[var].add(node)
-    
-    # Add implicit definitions (variables used but not redefined in some branches)
+            try:
+                if hasattr(instr, 'lvar') and hasattr(instr.lvar, 'name'):
+                    name = instr.lvar.name
+                elif hasattr(instr, 'var') and hasattr(instr.var, 'name'):
+                    name = instr.var.name
+                else:
+                    # Fallback to string parsing
+                    text = str(instr)
+                    if text.startswith(':') and '=' in text:
+                        name = text.split('=')[0].strip()
+                    else:
+                        continue
+                if name.startswith(':'):
+                    var_defs[name].add(node)
+            except Exception as e:
+                logger.debug(f"Skipping unrecognized instruction: {instr} - {e}")
+
     for var in var_defs:
-        var_defs[var].add(entry_block)  # Entry block defines all variables initially
-    
+        var_defs[var].add(entry_block)
+
     logger.info(f"Variables found: {list(var_defs.keys())}")
-    logger.info(f"Variables needing phi: {[v for v in var_defs if len(var_defs[v]) > 1]}")
     return var_defs
 
+# === Phi Function Insertion ===
 def insert_phi_functions(cfg, dominance_frontier, var_defs):
     phi_insertions = defaultdict(list)
-    
+
     for var, def_blocks in var_defs.items():
         if len(def_blocks) < 2:
             continue
-        
+
         worklist = deque(def_blocks)
-        processed = set()
         has_phi = set()
-        
+        processed = set()
+
         while worklist:
             block = worklist.popleft()
             for frontier in dominance_frontier.get(block, set()):
-                if frontier not in has_phi:
+                if frontier.name in {"START", "END"}:
+                    continue
+                if (frontier, var) not in has_phi:
                     phi = PhiFunction(var)
                     for pred in cfg.predecessors(frontier):
                         phi.add_value(var, pred)
                     frontier.instrlist.insert(0, (phi, 0))
-                    phi_insertions[var].append(frontier.label())
-                    has_phi.add(frontier)
+                    phi_insertions[var].append(frontier.name)
+                    has_phi.add((frontier, var))
                     if frontier not in processed:
                         worklist.append(frontier)
                         processed.add(frontier)
-    
-    # Log inserted phi functions
+
     for var, blocks in phi_insertions.items():
         logger.info(f"Inserted Φ({var}) at blocks: {', '.join(blocks)}")
-    logger.info(f"Total phi functions inserted: {sum(len(v) for v in phi_insertions.values())}")
+    logger.info(f"Total φ-functions inserted: {sum(len(v) for v in phi_insertions.values())}")
 
+# === SSA Construction Driver ===
 def construct_ssa(cfg):
     logger.info("=== SSA Construction Started ===")
     start_time = time.time()
-    
+
     if not validate_cfg(cfg):
         return None
-    
+
     try:
         dominators = compute_dominators(cfg)
         dominance_frontier = compute_dominance_frontiers(cfg, dominators)
         var_defs = find_variable_defs(cfg)
         insert_phi_functions(cfg, dominance_frontier, var_defs)
-        
-        logger.info(f"=== SSA Completed in {time.time() - start_time:.3f}s ===")
+
+        elapsed = time.time() - start_time
+        logger.info(f"=== SSA Completed in {elapsed:.3f} seconds ===")
         return cfg
     except Exception as e:
-        logger.error(f"SSA failed: {str(e)}", exc_info=True)
+        logger.error(f"SSA Construction Failed: {str(e)}", exc_info=True)
         return None
