@@ -4,7 +4,7 @@ Release = "Chiron v1.0.4"
 import ast
 import sys
 from ChironAST.builder import astGenPass
-from cfg.ssa import construct_ssa 
+from cfg.ssa import construct_ssa
 import abstractInterpretation as AI
 import dataFlowAnalysis as DFA
 from sbfl import testsuiteGenerator
@@ -37,7 +37,6 @@ def stopTurtle():
 
 
 if __name__ == "__main__":
-
     print(Release)
     print(
         """
@@ -224,7 +223,9 @@ if __name__ == "__main__":
         cfg = cfgB.buildCFG(ir, "control_flow_graph", True)
         irHandler.setCFG(cfg)
         
+        from cfg.ssa import construct_ssa
         construct_ssa(cfg)
+        
     else:
         irHandler.setCFG(None)
 
@@ -282,7 +283,7 @@ if __name__ == "__main__":
 
     if args.run:
         # for stmt,pc in ir:
-        #     print(str(stmt.class.bases[0].name),pc)
+        #     print(str(stmt.__class__.__bases__[0].__name__),pc)
 
         inptr = ConcreteInterpreter(irHandler, args)
         terminated = False
