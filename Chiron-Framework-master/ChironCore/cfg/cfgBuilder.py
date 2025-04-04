@@ -3,9 +3,38 @@ from networkx.drawing.nx_agraph import to_agraph
 from cfg.ChironCFG import BasicBlock, ChironCFG
 import ChironAST.ChironAST as ChironAST
 
+# SSA components and logging
+import logging
+import os
+from collections import defaultdict, deque
+
+# Set up logging
+log_file = os.path.join(os.getcwd(), "ssa_output.log")
+logging.basicConfig(
+    filename=log_file,
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+class PhiFunction:
+    """Represents a φ-function in SSA form."""
+    def __init__(self, target):
+        self.target = target
+        self.values = []  # List of (value, predecessor block) tuples
+
+    def add_value(self, value, block):
+        self.values.append((value, block))
+
+    def __str__(self):
+        args = ', '.join(f'{v}@{b.name}' for v, b in self.values)
+        return f"{self.target} = φ({args})"
+
+
 def buildCFG(ir, cfgName="", isSingle=False):
     # === Fix: Clear old BasicBlock state before creating a new CFG ===
-    BasicBlock.reset_counter()  # You should define this in BasicBlock to reset label count if needed
+    BasicBlock.reset_counter()
 
     # Create entry and exit blocks
     startBB = BasicBlock('START')
@@ -32,8 +61,7 @@ def buildCFG(ir, cfgName="", isSingle=False):
     # === Step 2: Create CFG ===
     cfg = ChironCFG(cfgName)
     for leader in leader2IndicesMap.keys():
-        # Clear phi and def/use from previous runs
-        leader.phi_functions = []
+        leader.phi_functions = []  # phi functions holder (optional)
         leader.defs = set()
         leader.uses = set()
         cfg.add_node(leader)
@@ -74,9 +102,7 @@ def buildCFG(ir, cfgName="", isSingle=False):
     return cfg
 
 def dumpCFG(cfg, filename="control_flow_graph"):
-    """
-    Generates and saves a graphical PNG image of the control flow graph.
-    """
+    """Generates and saves a graphical PNG image of the control flow graph."""
     try:
         G = cfg.nxgraph
         labels = {node: node.label() for node in cfg}
@@ -87,35 +113,10 @@ def dumpCFG(cfg, filename="control_flow_graph"):
         print(f"CFG image saved as {filename}.png")
     except Exception as e:
         print(f"Error generating CFG image: {e}")
-import logging
-import os
-from collections import defaultdict, deque
 
-# Set up logging
-log_file = os.path.join(os.getcwd(), "ssa_output.log")
-logging.basicConfig(
-    filename=log_file,
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-)
-logger = logging.getLogger()
-logger.setLevel(logging.INFO)
-
-class PhiFunction:
-    """Represents a φ-function in SSA form."""
-    def __init__(self, target):
-        self.target = target
-        self.values = []  # List of (value, predecessor block) tuples
-
-    def add_value(self, value, block):
-        self.values.append((value, block))
-
-    def __str__(self):
-        args = ', '.join(f'{v}@{b.name}' for v, b in self.values)
-        return f"{self.target} = φ({args})"
+# === SSA Construction Functions ===
 
 def validate_cfg(cfg):
-    """Validates the structure of the control flow graph (CFG)."""
     if cfg is None or not hasattr(cfg, 'nodes'):
         logger.error("Invalid CFG: None or missing 'nodes' attribute.")
         return False
@@ -125,7 +126,6 @@ def validate_cfg(cfg):
     return True
 
 def compute_dominators(cfg):
-    """Computes the dominator sets for each node in the CFG."""
     nodes = list(cfg.nodes())
     entry = next(iter(cfg.nodes()))
     dominators = {node: set(nodes) for node in nodes}
@@ -148,7 +148,6 @@ def compute_dominators(cfg):
     return dominators
 
 def compute_dominance_frontiers(cfg, dominators):
-    """Computes the dominance frontiers for each node in the CFG."""
     frontiers = defaultdict(set)
     for node in cfg.nodes():
         preds = list(cfg.predecessors(node))
@@ -164,7 +163,6 @@ def compute_dominance_frontiers(cfg, dominators):
     return frontiers
 
 def find_variable_defs(cfg):
-    """Identifies all variable definitions within the CFG."""
     var_defs = defaultdict(set)
     for node in cfg.nodes():
         for instr, idx in node.instrlist:
@@ -178,7 +176,6 @@ def find_variable_defs(cfg):
     return var_defs
 
 def insert_phi_functions(cfg, dominance_frontiers, var_defs):
-    """Inserts φ-functions into the CFG at appropriate locations."""
     phi_insertions = defaultdict(list)
     for var, defining_blocks in var_defs.items():
         if len(defining_blocks) < 2:
@@ -193,7 +190,7 @@ def insert_phi_functions(cfg, dominance_frontiers, var_defs):
                     phi = PhiFunction(var)
                     for pred in cfg.predecessors(frontier):
                         phi.add_value(var, pred)
-                    frontier.instrlist.insert(0, (phi, 0))
+                    frontier.instrlist.insert(0, (phi, 0))  # phi insertion
                     phi_insertions[var].append(frontier.name)
                     has_phi.add((frontier, var))
                     if frontier not in processed:
@@ -208,43 +205,49 @@ def rename_variables(cfg, dominators):
     current_version = defaultdict(int)
     var_stack = defaultdict(list)
 
-    def rename_recursive(block):
+    def rename_recursive(block, visited):
+        if block in visited:
+            return
+        visited.add(block)
+
         new_instrlist = []
         for instr, idx in block.instrlist:
             if isinstance(instr, PhiFunction):
-                new_target = f"{instr.target}_{current_version[instr.target]}"
-                current_version[instr.target] += 1
-                var_stack[instr.target].append(new_target)
-                instr.target = new_target
+                old = instr.target
+                new = f"{old}_{current_version[old]}"
+                current_version[old] += 1
+                var_stack[old].append(new)
+                instr.target = new
                 new_instrlist.append((instr, idx))
             else:
-                if hasattr(instr, 'lvar') and instr.lvar and hasattr(instr.lvar, 'name'):
-                    old_var = instr.lvar.name
-                    new_var = f"{old_var}_{current_version[old_var]}"
-                    current_version[old_var] += 1
-                    var_stack[old_var].append(new_var)
-                    instr.lvar.name = new_var
+                # Rename used variables (right-hand side)
                 if hasattr(instr, 'rvars'):
                     for rvar in instr.rvars:
-                        if hasattr(rvar, 'name'):
-                            old_var = rvar.name
-                            if var_stack[old_var]:
-                                rvar.name = var_stack[old_var][-1]
+                        if hasattr(rvar, 'name') and var_stack[rvar.name]:
+                            rvar.name = var_stack[rvar.name][-1]
+                # Rename defined variable (left-hand side)
+                if hasattr(instr, 'lvar') and instr.lvar and hasattr(instr.lvar, 'name'):
+                    old = instr.lvar.name
+                    new = f"{old}_{current_version[old]}"
+                    current_version[old] += 1
+                    var_stack[old].append(new)
+                    instr.lvar.name = new
                 new_instrlist.append((instr, idx))
 
         block.instrlist = new_instrlist
-        for succ in cfg.successors(block):
-            if block in dominators.get(succ, []):
-                rename_recursive(succ)
 
-        for instr, idx in new_instrlist:
+        for succ in cfg.successors(block):
+            rename_recursive(succ, visited)
+
+        for instr, idx in reversed(new_instrlist):
             if isinstance(instr, PhiFunction):
                 var_stack[instr.target].pop()
             elif hasattr(instr, 'lvar') and instr.lvar and hasattr(instr.lvar, 'name'):
                 var_stack[instr.lvar.name].pop()
 
+    visited = set()
     entry_block = next(iter(cfg.nodes()))
-    rename_recursive(entry_block)
+    rename_recursive(entry_block, visited)
 
 def convert_to_ssa(cfg):
     """Converts the given CFG to SSA form."""

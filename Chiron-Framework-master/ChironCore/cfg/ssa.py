@@ -82,7 +82,7 @@ def compute_dominance_frontiers(cfg, dominators):
 # === Variable Definition Detection ===
 def find_variable_defs(cfg):
     var_defs = defaultdict(set)
-    entry_block = next(iter(cfg.nodes()))  # assume first block is entry
+    entry_block = next(iter(cfg.nodes()))
 
     for node in cfg.nodes():
         for stmt in node.instrlist:
@@ -93,7 +93,6 @@ def find_variable_defs(cfg):
                 elif hasattr(instr, 'var') and hasattr(instr.var, 'name'):
                     name = instr.var.name
                 else:
-                    # Fallback to string parsing
                     text = str(instr)
                     if text.startswith(':') and '=' in text:
                         name = text.split('=')[0].strip()
@@ -142,6 +141,42 @@ def insert_phi_functions(cfg, dominance_frontier, var_defs):
         logger.info(f"Inserted Φ({var}) at blocks: {', '.join(blocks)}")
     logger.info(f"Total φ-functions inserted: {sum(len(v) for v in phi_insertions.values())}")
 
+# === SSA Renaming (ADDED) ===
+def rename_variables_ssa(cfg):
+    counters = defaultdict(int)
+    stack = defaultdict(list)
+
+    def rename_block(block):
+        renamed_instrs = []
+        for instr_tuple in block.instrlist:
+            instr = instr_tuple[0] if isinstance(instr_tuple, tuple) else instr_tuple
+            text = str(instr)
+
+            # Rename definitions
+            if text.startswith(':') and '=' in text:
+                var = text.split('=')[0].strip()
+                counters[var] += 1
+                new_name = f"{var}_{counters[var]}"
+                stack[var].append(new_name)
+                new_instr = text.replace(var, new_name, 1)
+                renamed_instrs.append((new_instr, 1))
+
+            # Rename uses in phi or conditions or statements
+            elif 'Φ' in text:
+                for key in stack:
+                    text = text.replace(key, stack[key][-1] if stack[key] else key)
+                renamed_instrs.append((text, 1))
+            else:
+                for key in stack:
+                    if key in text:
+                        text = text.replace(key, stack[key][-1])
+                renamed_instrs.append((text, 1))
+
+        block.instrlist = renamed_instrs
+
+    for block in cfg.nodes():
+        rename_block(block)
+
 # === SSA Construction Driver ===
 def construct_ssa(cfg):
     logger.info("=== SSA Construction Started ===")
@@ -155,6 +190,8 @@ def construct_ssa(cfg):
         dominance_frontier = compute_dominance_frontiers(cfg, dominators)
         var_defs = find_variable_defs(cfg)
         insert_phi_functions(cfg, dominance_frontier, var_defs)
+
+        rename_variables_ssa(cfg)  # ADDED: Perform SSA renaming after phi insertion
 
         elapsed = time.time() - start_time
         logger.info(f"=== SSA Completed in {elapsed:.3f} seconds ===")

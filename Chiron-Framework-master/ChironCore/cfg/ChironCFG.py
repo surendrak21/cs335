@@ -19,6 +19,8 @@ class BasicBlock:
             self.irID = BasicBlock._counter
             BasicBlock._counter += 1
 
+        self.var_versions = {}  # ✅ [Added] SSA variable version tracking per block
+
     def __str__(self):
         return self.name
 
@@ -47,6 +49,17 @@ class BasicBlock:
     def reset_counter():
         """Reset the static counter for IR IDs. Useful for regenerating fresh CFGs."""
         BasicBlock._counter = 0
+
+    # ✅ [Added] Optional method for debug output including variable version tracking
+    def get_instr_with_versions(self):
+        """
+        Return instructions as strings including SSA variable versions.
+        Only for debug/analysis purposes.
+        """
+        output = []
+        for instr, idx in self.instrlist:
+            output.append(f"[L{idx}] {instr}")
+        return "\n".join(output)
 
 
 class ChironCFG:
