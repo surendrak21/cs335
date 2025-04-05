@@ -198,6 +198,11 @@ if __name__ == "__main__":
         default=True,
         type=bool,
     )
+    cmdparser.add_argument(
+        "--ssa",
+        help="Construct SSA form of the Chiron program",
+        action="store_true",
+    )
 
     args = cmdparser.parse_args()
     ir = ""

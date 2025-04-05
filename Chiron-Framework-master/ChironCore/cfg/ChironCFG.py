@@ -19,7 +19,7 @@ class BasicBlock:
             self.irID = BasicBlock._counter
             BasicBlock._counter += 1
 
-        self.var_versions = {}  # ✅ [Added] SSA variable version tracking per block
+        self.var_versions = {}  # ✅ [ADDED] SSA variable version tracking per block
 
     def __str__(self):
         return self.name
@@ -40,6 +40,7 @@ class BasicBlock:
         Generate a label for visualization or printing.
         Shows instructions with their IR index if present, otherwise block name.
         """
+        # ✅ [UPDATED] Use actual idx for label like L3, L4... for uniqueness
         if self.instrlist:
             return '\n'.join(f"{str(instr[0])}; L{instr[1]}" for instr in self.instrlist)
         else:
@@ -50,7 +51,7 @@ class BasicBlock:
         """Reset the static counter for IR IDs. Useful for regenerating fresh CFGs."""
         BasicBlock._counter = 0
 
-    # ✅ [Added] Optional method for debug output including variable version tracking
+    # ✅ [ADDED] Optional method for debug output including variable version tracking
     def get_instr_with_versions(self):
         """
         Return instructions as strings including SSA variable versions.

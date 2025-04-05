@@ -23,7 +23,21 @@ class PhiFunction:
         self.values.append((value, block))
 
     def __str__(self):
-        joined = ', '.join(f'{v}@{b.label()}' for v, b in self.values)
+        # ✅ UPDATED: Generate clean phi format like y_3 = Φ(y_2; L5, y_1; L1)
+        formatted = []
+        for value, block in self.values:
+            var_version = None
+            # Reverse to prioritize most recent definition
+            for instr in reversed(block.instrlist):
+                instr_text = instr[0] if isinstance(instr, tuple) else instr
+                instr_str = str(instr_text).strip()
+                if instr_str.startswith(value + "_") or f"{value}_" in instr_str:
+                    var_version = instr_str.split('=')[0].strip()
+                    break
+            if not var_version:
+                var_version = value
+            formatted.append(f"{var_version}; {block.label()}")
+        joined = ', '.join(formatted)
         return f"{self.target} = Φ({joined})"
 
 # === CFG Validation ===
@@ -130,7 +144,7 @@ def insert_phi_functions(cfg, dominance_frontier, var_defs):
                     phi = PhiFunction(var)
                     for pred in cfg.predecessors(frontier):
                         phi.add_value(var, pred)
-                    frontier.instrlist.insert(0, (phi, 0))
+                    frontier.instrlist.insert(0, (phi, 0))  # ✅ [Uses 0 index as placeholder]
                     phi_insertions[var].append(frontier.name)
                     has_phi.add((frontier, var))
                     if frontier not in processed:
@@ -141,36 +155,45 @@ def insert_phi_functions(cfg, dominance_frontier, var_defs):
         logger.info(f"Inserted Φ({var}) at blocks: {', '.join(blocks)}")
     logger.info(f"Total φ-functions inserted: {sum(len(v) for v in phi_insertions.values())}")
 
-# === SSA Renaming (ADDED) ===
-def rename_variables_ssa(cfg):
+# === SSA Renaming ===
+def rename_variables_ssa(cfg):  # ✅ [ADDED] SSA renaming logic
+    instr_index = 0  # ✅ Global counter for instruction indexing
+
     counters = defaultdict(int)
     stack = defaultdict(list)
 
     def rename_block(block):
         renamed_instrs = []
+        nonlocal instr_index  # ✅ To keep index global across blocks
+
         for instr_tuple in block.instrlist:
             instr = instr_tuple[0] if isinstance(instr_tuple, tuple) else instr_tuple
             text = str(instr)
 
             # Rename definitions
-            if text.startswith(':') and '=' in text:
+            if text.startswith(':') and '=' in text and 'Φ' not in text:
                 var = text.split('=')[0].strip()
                 counters[var] += 1
                 new_name = f"{var}_{counters[var]}"
                 stack[var].append(new_name)
                 new_instr = text.replace(var, new_name, 1)
-                renamed_instrs.append((new_instr, 1))
+                instr_index += 1
+                renamed_instrs.append((new_instr, instr_index))
 
-            # Rename uses in phi or conditions or statements
+            # Rename phi functions
             elif 'Φ' in text:
-                for key in stack:
-                    text = text.replace(key, stack[key][-1] if stack[key] else key)
-                renamed_instrs.append((text, 1))
+                for var in stack:
+                    if stack[var]:
+                        text = text.replace(var, stack[var][-1])
+                instr_index += 1
+                renamed_instrs.append((text, instr_index))
+
             else:
-                for key in stack:
-                    if key in text:
-                        text = text.replace(key, stack[key][-1])
-                renamed_instrs.append((text, 1))
+                for var in stack:
+                    if stack[var]:
+                        text = text.replace(var, stack[var][-1])
+                instr_index += 1
+                renamed_instrs.append((text, instr_index))
 
         block.instrlist = renamed_instrs
 
@@ -191,7 +214,7 @@ def construct_ssa(cfg):
         var_defs = find_variable_defs(cfg)
         insert_phi_functions(cfg, dominance_frontier, var_defs)
 
-        rename_variables_ssa(cfg)  # ADDED: Perform SSA renaming after phi insertion
+        rename_variables_ssa(cfg)  # ✅ [ADDED] SSA renaming after φ insertion
 
         elapsed = time.time() - start_time
         logger.info(f"=== SSA Completed in {elapsed:.3f} seconds ===")

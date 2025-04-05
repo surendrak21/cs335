@@ -8,7 +8,7 @@ import logging
 import os
 from collections import defaultdict, deque
 
-# Set up logging
+# === Logging Setup ===
 log_file = os.path.join(os.getcwd(), "ssa_output.log")
 logging.basicConfig(
     filename=log_file,
@@ -18,11 +18,12 @@ logging.basicConfig(
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 
+
 class PhiFunction:
     """Represents a φ-function in SSA form."""
     def __init__(self, target):
         self.target = target
-        self.values = []  # List of (value, predecessor block) tuples
+        self.values = []
 
     def add_value(self, value, block):
         self.values.append((value, block))
@@ -33,10 +34,9 @@ class PhiFunction:
 
 
 def buildCFG(ir, cfgName="", isSingle=False):
-    # === Fix: Clear old BasicBlock state before creating a new CFG ===
+    # === 🔁 Reset BasicBlock counter for consistent labeling ===
     BasicBlock.reset_counter()
 
-    # Create entry and exit blocks
     startBB = BasicBlock('START')
     endBB = BasicBlock('END')
 
@@ -58,20 +58,20 @@ def buildCFG(ir, cfgName="", isSingle=False):
                 leader2IndicesMap[elseBranchLeader] = idx + item[1]
                 indices2LeadersMap[idx + item[1]] = elseBranchLeader
 
-    # === Step 2: Create CFG ===
+    # === Step 2: Create CFG nodes ===
     cfg = ChironCFG(cfgName)
     for leader in leader2IndicesMap.keys():
-        leader.phi_functions = []  # phi functions holder (optional)
+        leader.phi_functions = []
         leader.defs = set()
         leader.uses = set()
         cfg.add_node(leader)
 
-    # === Step 3: Populate instructions in basic blocks ===
+    # === Step 3: Populate instructions with correct IR indices ✅ ===
     for currLeader in leader2IndicesMap.keys():
         leaderIdx = leader2IndicesMap[currLeader]
         currIdx = leaderIdx
         while currIdx < len(ir):
-            currLeader.append((ir[currIdx][0], currIdx))
+            currLeader.append((ir[currIdx][0], currIdx))  # ✅ Use actual idx (important for label tracking)
             currIdx += 1
             if currIdx in leaderIndices:
                 break
@@ -101,8 +101,8 @@ def buildCFG(ir, cfgName="", isSingle=False):
 
     return cfg
 
+
 def dumpCFG(cfg, filename="control_flow_graph"):
-    """Generates and saves a graphical PNG image of the control flow graph."""
     try:
         G = cfg.nxgraph
         labels = {node: node.label() for node in cfg}
@@ -114,7 +114,8 @@ def dumpCFG(cfg, filename="control_flow_graph"):
     except Exception as e:
         print(f"Error generating CFG image: {e}")
 
-# === SSA Construction Functions ===
+
+# === SSA CONSTRUCTION ===
 
 def validate_cfg(cfg):
     if cfg is None or not hasattr(cfg, 'nodes'):
@@ -124,6 +125,7 @@ def validate_cfg(cfg):
         logger.error("CFG is empty.")
         return False
     return True
+
 
 def compute_dominators(cfg):
     nodes = list(cfg.nodes())
@@ -147,6 +149,7 @@ def compute_dominators(cfg):
                 changed = True
     return dominators
 
+
 def compute_dominance_frontiers(cfg, dominators):
     frontiers = defaultdict(set)
     for node in cfg.nodes():
@@ -162,6 +165,7 @@ def compute_dominance_frontiers(cfg, dominators):
                         break
     return frontiers
 
+
 def find_variable_defs(cfg):
     var_defs = defaultdict(set)
     for node in cfg.nodes():
@@ -171,9 +175,10 @@ def find_variable_defs(cfg):
                 if var_name.startswith(':'):
                     var_defs[var_name].add(node)
             else:
-                logger.warning(f"Instruction at index {idx} is missing a proper lvar.name")
+                logger.warning(f"Instruction at index {idx} missing lvar.name")
     logger.info(f"Variables found: {list(var_defs.keys())}")
     return var_defs
+
 
 def insert_phi_functions(cfg, dominance_frontiers, var_defs):
     phi_insertions = defaultdict(list)
@@ -190,7 +195,7 @@ def insert_phi_functions(cfg, dominance_frontiers, var_defs):
                     phi = PhiFunction(var)
                     for pred in cfg.predecessors(frontier):
                         phi.add_value(var, pred)
-                    frontier.instrlist.insert(0, (phi, 0))  # phi insertion
+                    frontier.instrlist.insert(0, (phi, 0))  # ✅ φ inserted at top
                     phi_insertions[var].append(frontier.name)
                     has_phi.add((frontier, var))
                     if frontier not in processed:
@@ -200,8 +205,8 @@ def insert_phi_functions(cfg, dominance_frontiers, var_defs):
         logger.info(f"Inserted φ({var}) at blocks: {', '.join(blocks)}")
     logger.info(f"Total φ-functions inserted: {sum(len(v) for v in phi_insertions.values())}")
 
+
 def rename_variables(cfg, dominators):
-    """Renames variables to ensure each has a unique assignment in SSA form."""
     current_version = defaultdict(int)
     var_stack = defaultdict(list)
 
@@ -220,12 +225,10 @@ def rename_variables(cfg, dominators):
                 instr.target = new
                 new_instrlist.append((instr, idx))
             else:
-                # Rename used variables (right-hand side)
                 if hasattr(instr, 'rvars'):
                     for rvar in instr.rvars:
                         if hasattr(rvar, 'name') and var_stack[rvar.name]:
                             rvar.name = var_stack[rvar.name][-1]
-                # Rename defined variable (left-hand side)
                 if hasattr(instr, 'lvar') and instr.lvar and hasattr(instr.lvar, 'name'):
                     old = instr.lvar.name
                     new = f"{old}_{current_version[old]}"
@@ -242,15 +245,16 @@ def rename_variables(cfg, dominators):
         for instr, idx in reversed(new_instrlist):
             if isinstance(instr, PhiFunction):
                 var_stack[instr.target].pop()
-            elif hasattr(instr, 'lvar') and instr.lvar and hasattr(instr.lvar, 'name'):
+            elif hasattr(instr, 'lvar') and instr.lvar and hasattr(instr.lvar.name):
                 var_stack[instr.lvar.name].pop()
 
     visited = set()
     entry_block = next(iter(cfg.nodes()))
     rename_recursive(entry_block, visited)
 
+
 def convert_to_ssa(cfg):
-    """Converts the given CFG to SSA form."""
+    """Main entry for SSA conversion."""
     if not validate_cfg(cfg):
         return
     dominators = compute_dominators(cfg)
